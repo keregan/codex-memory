@@ -1,0 +1,40 @@
+# Python caches and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.test_*/
+
+# Virtual environments and local tooling
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Private chat data and generated memory
+history*.txt
+chat*.txt
+transcript*.txt
+exports/
+memory/
+*.sqlite
+*.sqlite3
+*.db
+
+# Logs and operating-system files
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
