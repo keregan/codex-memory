@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
+import shutil
+import uuid
 from pathlib import Path
 from typing import Any
 
-from .models import SCHEMA_VERSION
+from .migrations import migrate_memory_document
+from .schema import validate_memory_document
 
 
 def project_directory(memory_root: Path, project: str) -> Path:
@@ -25,11 +27,7 @@ def load_memory(project_dir: Path, expected_project: str | None = None) -> dict[
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"Cannot read existing memory file {path}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError(f"Existing memory must be a JSON object: {path}")
-    version = data.get("schema_version")
-    if version != SCHEMA_VERSION:
-        raise ValueError(f"Unsupported memory schema version {version!r}; expected {SCHEMA_VERSION}")
+    data, _ = migrate_memory_document(data)
     if expected_project is not None and data.get("project") != expected_project:
         raise ValueError(
             f"Memory project mismatch in {path}: expected {expected_project!r}, got {data.get('project')!r}"
@@ -40,36 +38,44 @@ def load_memory(project_dir: Path, expected_project: str | None = None) -> dict[
 
 
 def write_project(project_dir: Path, memory: dict[str, Any], markdown_files: dict[str, str]) -> None:
-    project_dir.mkdir(parents=True, exist_ok=True)
+    validate_memory_document(memory)
+    project_dir.parent.mkdir(parents=True, exist_ok=True)
     files = {"memory.json": json.dumps(memory, ensure_ascii=False, indent=2) + "\n", **markdown_files}
-    temporary_files: list[tuple[Path, Path]] = []
+    staging = project_dir.parent / f".{project_dir.name}.staging-{uuid.uuid4().hex}"
+    staging.mkdir()
     try:
+        if project_dir.exists():
+            if not project_dir.is_dir():
+                raise ValueError(f"Project memory path is not a directory: {project_dir}")
+            shutil.copytree(project_dir, staging, dirs_exist_ok=True, symlinks=True)
         for name, content in files.items():
             if Path(name).name != name:
                 raise ValueError(f"Invalid output filename: {name}")
-            path = project_dir / name
-            temporary_files.append((path, _write_temporary(path, content)))
-        for path, temporary in temporary_files:
-            os.replace(temporary, path)
+            _write_complete(staging / name, content)
+        _replace_directory(project_dir, staging)
     finally:
-        for _, temporary in temporary_files:
-            try:
-                temporary.unlink()
-            except FileNotFoundError:
-                pass
+        if staging.exists():
+            shutil.rmtree(staging)
 
 
-def _write_temporary(path: Path, content: str) -> Path:
-    descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+def _write_complete(path: Path, content: str) -> None:
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _replace_directory(project_dir: Path, staging: Path) -> None:
+    if not project_dir.exists():
+        os.replace(staging, project_dir)
+        return
+
+    backup = project_dir.parent / f".{project_dir.name}.backup-{uuid.uuid4().hex}"
+    os.replace(project_dir, backup)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        return Path(temp_name)
+        os.replace(staging, project_dir)
     except BaseException:
-        try:
-            os.unlink(temp_name)
-        except FileNotFoundError:
-            pass
+        os.replace(backup, project_dir)
         raise
+    else:
+        shutil.rmtree(backup)

@@ -1,14 +1,28 @@
 import shutil
+import io
+import sys
 import unittest
 import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-from codex_memory.cli import main
+from codex_memory.cli import _configure_console_output, main
 from codex_memory.models import ProjectCandidate
 
 
 class CliTests(unittest.TestCase):
+    def test_console_output_survives_restrictive_windows_encoding(self):
+        buffer = io.BytesIO()
+        stream = io.TextIOWrapper(buffer, encoding="cp1252", errors="strict")
+        try:
+            with patch.object(sys, "stdout", stream):
+                _configure_console_output()
+                print("Русский текст")
+                stream.flush()
+            self.assertIn(b"\\u", buffer.getvalue())
+        finally:
+            stream.detach()
+
     def test_create_then_update_without_changing_sources(self):
         directory = Path(".test_work") / uuid.uuid4().hex
         directory.mkdir(parents=True)
@@ -83,6 +97,19 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(result, 2)
             self.assertFalse((memory_root / "first_project").exists())
+        finally:
+            shutil.rmtree(directory)
+
+    def test_rejects_chunk_size_below_safe_minimum(self):
+        directory = Path(".test_work") / uuid.uuid4().hex
+        directory.mkdir(parents=True)
+        try:
+            source = directory / "history.txt"
+            source.write_text("telegram_bot", encoding="utf-8")
+
+            result = main([str(source), "--projects", "telegram_bot", "--yes", "--chunk-chars", "999"])
+
+            self.assertEqual(result, 2)
         finally:
             shutil.rmtree(directory)
 

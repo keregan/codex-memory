@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 CONFIDENCE_LEVELS = {"HIGH", "MEDIUM", "LOW"}
 TASK_STATUSES = {"current", "todo", "idea", "bug", "completed"}
 
@@ -55,6 +55,7 @@ def empty_memory(project: str, display_name: str | None = None) -> dict[str, Any
             "do_not_change": [],
         },
         "update_history": [],
+        "created_at": "",
         "last_updated": "",
     }
 

@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from .analyzer import LLMAnalyzer, RuleBasedAnalyzer
+from .chunking import DEFAULT_CHUNK_CHARS, MIN_CHUNK_CHARS
 from .clipboard import read_clipboard_text
 from .history_reader import parse_history, read_history
 from .llm import ChatCompletionsClient
@@ -45,10 +46,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--model", default=os.environ.get("CODEX_MEMORY_MODEL", ""),
         help="Model name; env: CODEX_MEMORY_MODEL",
     )
+    parser.add_argument(
+        "--chunk-chars", type=int, default=DEFAULT_CHUNK_CHARS,
+        help=f"Maximum approximate characters per LLM request (minimum {MIN_CHUNK_CHARS})",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_console_output()
     args = build_parser().parse_args(argv)
     try:
         if args.clipboard and args.history:
@@ -122,12 +128,17 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _make_analyzer(args: argparse.Namespace):
+    if args.chunk_chars < MIN_CHUNK_CHARS:
+        raise ValueError(f"--chunk-chars must be at least {MIN_CHUNK_CHARS}")
     if args.provider == "rules":
         return RuleBasedAnalyzer()
     if not args.api_url or not args.model:
         raise ValueError("--provider llm requires --api-url and --model (or matching environment variables)")
     print("Внимание: история будет отправлена на явно настроенный LLM API.")
-    return LLMAnalyzer(ChatCompletionsClient(args.api_url, args.model, args.api_key))
+    return LLMAnalyzer(
+        ChatCompletionsClient(args.api_url, args.model, args.api_key),
+        chunk_chars=args.chunk_chars,
+    )
 
 
 def _candidates_from_names(value: str) -> list[ProjectCandidate]:
@@ -170,3 +181,14 @@ def _single_existing_candidate(memory_dir: Path) -> list[ProjectCandidate]:
         return []
     name = safe_project_name(existing[0].name)
     return [ProjectCandidate(name=name, display_name=name.replace("_", " ").title(), confidence="LOW")]
+
+
+def _configure_console_output() -> None:
+    """Prevent localized CLI messages from crashing on restrictive Windows code pages."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(errors="backslashreplace")
+            except (OSError, ValueError):
+                pass

@@ -5,6 +5,7 @@ import re
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Protocol
 
+from .chunking import DEFAULT_CHUNK_CHARS, chunk_messages
 from .models import Message, ProjectCandidate, message_to_dict, validate_extraction
 from .project_names import safe_project_name
 
@@ -134,10 +135,25 @@ class RuleBasedAnalyzer:
 
 
 class LLMAnalyzer:
-    def __init__(self, client: "ChatCompletionsClient") -> None:
+    def __init__(self, client: "ChatCompletionsClient", chunk_chars: int = DEFAULT_CHUNK_CHARS) -> None:
         self.client = client
+        self.chunk_chars = chunk_chars
 
     def detect_projects(self, messages: list[Message]) -> list[ProjectCandidate]:
+        combined: dict[str, ProjectCandidate] = {}
+        for chunk in chunk_messages(messages, self.chunk_chars):
+            for candidate in self._detect_projects_chunk(chunk):
+                existing = combined.get(candidate.name)
+                if existing is None:
+                    combined[candidate.name] = candidate
+                    continue
+                existing.aliases = sorted(set([*existing.aliases, *candidate.aliases]))
+                existing.message_numbers = sorted(set([*existing.message_numbers, *candidate.message_numbers]))
+                if _confidence_rank(candidate.confidence) > _confidence_rank(existing.confidence):
+                    existing.confidence = candidate.confidence
+        return sorted(combined.values(), key=lambda item: item.name)
+
+    def _detect_projects_chunk(self, messages: list[Message]) -> list[ProjectCandidate]:
         payload = [message_to_dict(message) for message in messages]
         result = self.client.json_completion(
             DETECT_SYSTEM_PROMPT,
@@ -163,17 +179,57 @@ class LLMAnalyzer:
 
     def extract(self, project: ProjectCandidate, messages: list[Message]) -> dict[str, Any]:
         relevant = _relevant_messages(project, messages)
-        user_content = json.dumps({
-            "project": {
-                "name": project.name,
-                "display_name": project.display_name,
-                "aliases": project.aliases,
-            },
-            "messages": [message_to_dict(message) for message in relevant],
-        }, ensure_ascii=False)
-        return validate_extraction(
-            self.client.json_completion(EXTRACT_SYSTEM_PROMPT, user_content)
-        )
+        extracted = []
+        for chunk in chunk_messages(relevant, self.chunk_chars):
+            user_content = json.dumps({
+                "project": {
+                    "name": project.name,
+                    "display_name": project.display_name,
+                    "aliases": project.aliases,
+                },
+                "messages": [message_to_dict(message) for message in chunk],
+            }, ensure_ascii=False)
+            extracted.append(validate_extraction(
+                self.client.json_completion(EXTRACT_SYSTEM_PROMPT, user_content)
+            ))
+        return _combine_extractions(extracted)
+
+
+def _combine_extractions(extractions: list[dict[str, Any]]) -> dict[str, Any]:
+    combined: dict[str, Any] = {
+        "summary": "",
+        "purpose": "",
+        "technologies": [],
+        "architecture": [],
+        "components": [],
+        "implemented": [],
+        "constraints": [],
+        "decisions": [],
+        "tasks": [],
+        "open_questions": [],
+        "agent_instructions": {
+            "structure": [], "commands": [], "conventions": [], "rules": [], "do_not_change": [],
+        },
+    }
+    list_fields = (
+        "technologies", "architecture", "components", "implemented", "constraints",
+        "decisions", "tasks", "open_questions",
+    )
+    for extraction in extractions:
+        for scalar in ("summary", "purpose"):
+            if extraction.get(scalar):
+                combined[scalar] = extraction[scalar]
+        for field in list_fields:
+            combined[field].extend(extraction.get(field, []))
+        for field in combined["agent_instructions"]:
+            combined["agent_instructions"][field].extend(
+                extraction.get("agent_instructions", {}).get(field, [])
+            )
+    return validate_extraction(combined)
+
+
+def _confidence_rank(value: str) -> int:
+    return {"LOW": 0, "MEDIUM": 1, "HIGH": 2}.get(value, 1)
 
 
 def _relevant_messages(project: ProjectCandidate, messages: list[Message]) -> list[Message]:

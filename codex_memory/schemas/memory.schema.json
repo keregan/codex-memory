@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/codex-memory/memory.schema.json",
+  "title": "Codex Memory project memory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "project", "display_name", "aliases", "summary", "purpose",
+    "technologies", "architecture", "components", "implemented", "constraints",
+    "current_tasks", "todo_tasks", "completed_tasks", "ideas", "known_bugs",
+    "decisions", "open_questions", "agent_instructions", "update_history",
+    "created_at", "last_updated"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "project": {"type": "string", "minLength": 1},
+    "display_name": {"type": "string"},
+    "aliases": {"type": "array", "items": {"type": "string"}},
+    "summary": {"type": "string"},
+    "purpose": {"type": "string"},
+    "technologies": {"$ref": "#/$defs/factList"},
+    "architecture": {"$ref": "#/$defs/factList"},
+    "components": {"$ref": "#/$defs/factList"},
+    "implemented": {"$ref": "#/$defs/factList"},
+    "constraints": {"$ref": "#/$defs/factList"},
+    "current_tasks": {"$ref": "#/$defs/taskList"},
+    "todo_tasks": {"$ref": "#/$defs/taskList"},
+    "completed_tasks": {"$ref": "#/$defs/taskList"},
+    "ideas": {"$ref": "#/$defs/taskList"},
+    "known_bugs": {"$ref": "#/$defs/taskList"},
+    "decisions": {
+      "type": "array",
+      "items": {"oneOf": [{"type": "string", "minLength": 1}, {"$ref": "#/$defs/decision"}]}
+    },
+    "open_questions": {"$ref": "#/$defs/factList"},
+    "agent_instructions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["structure", "commands", "conventions", "rules", "do_not_change"],
+      "properties": {
+        "structure": {"$ref": "#/$defs/factList"},
+        "commands": {"$ref": "#/$defs/factList"},
+        "conventions": {"$ref": "#/$defs/factList"},
+        "rules": {"$ref": "#/$defs/factList"},
+        "do_not_change": {"$ref": "#/$defs/factList"}
+      }
+    },
+    "update_history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["date", "source", "mode"],
+        "properties": {
+          "date": {"type": "string"},
+          "source": {"type": "string"},
+          "mode": {"enum": ["create", "update"]}
+        }
+      }
+    },
+    "created_at": {"type": "string"},
+    "last_updated": {"type": "string"}
+  },
+  "$defs": {
+    "confidence": {"enum": ["HIGH", "MEDIUM", "LOW"]},
+    "sourceBlocks": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 1},
+      "uniqueItems": true
+    },
+    "fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "properties": {
+        "text": {"type": "string", "minLength": 1},
+        "confidence": {"$ref": "#/$defs/confidence"},
+        "source_blocks": {"$ref": "#/$defs/sourceBlocks"}
+      }
+    },
+    "factList": {
+      "type": "array",
+      "items": {"oneOf": [{"type": "string", "minLength": 1}, {"$ref": "#/$defs/fact"}]}
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1},
+        "status": {"enum": ["current", "todo", "idea", "bug", "completed"]},
+        "confidence": {"$ref": "#/$defs/confidence"},
+        "source_blocks": {"$ref": "#/$defs/sourceBlocks"}
+      }
+    },
+    "taskList": {
+      "type": "array",
+      "items": {"oneOf": [{"type": "string", "minLength": 1}, {"$ref": "#/$defs/task"}]}
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1},
+        "reason": {"type": "string"},
+        "date": {"type": "string"},
+        "previous": {"type": "string"},
+        "status": {"enum": ["active", "superseded"]},
+        "confidence": {"$ref": "#/$defs/confidence"},
+        "source_blocks": {"$ref": "#/$defs/sourceBlocks"}
+      }
+    }
+  }
+}

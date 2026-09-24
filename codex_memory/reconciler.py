@@ -49,6 +49,8 @@ def reconcile(
 
     _apply_explicit_technology_changes(memory, extraction.get("decisions", []))
     now = utc_now()
+    if not memory.get("created_at"):
+        memory["created_at"] = now
     memory["last_updated"] = now
     memory.setdefault("update_history", []).append({
         "date": now,
