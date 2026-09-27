@@ -9,7 +9,12 @@ from .analyzer import LLMAnalyzer, RuleBasedAnalyzer
 from .chunking import DEFAULT_CHUNK_CHARS, MIN_CHUNK_CHARS
 from .clipboard import read_clipboard_text
 from .history_reader import parse_history, read_history
-from .llm import ChatCompletionsClient
+from .llm import (
+    DEFAULT_LLM_RETRIES,
+    DEFAULT_LLM_TIMEOUT,
+    DEFAULT_MAX_RESPONSE_BYTES,
+    ChatCompletionsClient,
+)
 from .markdown_renderer import render_all
 from .models import ProjectCandidate
 from .project_names import safe_project_name
@@ -49,6 +54,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--chunk-chars", type=int, default=DEFAULT_CHUNK_CHARS,
         help=f"Maximum approximate characters per LLM request (minimum {MIN_CHUNK_CHARS})",
+    )
+    parser.add_argument(
+        "--llm-timeout", type=int, default=DEFAULT_LLM_TIMEOUT,
+        help="Timeout in seconds for each LLM request",
+    )
+    parser.add_argument(
+        "--llm-retries", type=int, default=DEFAULT_LLM_RETRIES,
+        help="Retries for temporary LLM API failures (0-10)",
+    )
+    parser.add_argument(
+        "--llm-max-response-bytes", type=int, default=DEFAULT_MAX_RESPONSE_BYTES,
+        help="Maximum accepted LLM API response size in bytes",
     )
     return parser
 
@@ -136,7 +153,14 @@ def _make_analyzer(args: argparse.Namespace):
         raise ValueError("--provider llm requires --api-url and --model (or matching environment variables)")
     print("Внимание: история будет отправлена на явно настроенный LLM API.")
     return LLMAnalyzer(
-        ChatCompletionsClient(args.api_url, args.model, args.api_key),
+        ChatCompletionsClient(
+            args.api_url,
+            args.model,
+            args.api_key,
+            timeout=args.llm_timeout,
+            max_response_bytes=args.llm_max_response_bytes,
+            retries=args.llm_retries,
+        ),
         chunk_chars=args.chunk_chars,
     )
 
