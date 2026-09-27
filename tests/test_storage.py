@@ -80,6 +80,35 @@ class StorageTests(unittest.TestCase):
         finally:
             shutil.rmtree(directory)
 
+    def test_rejects_symlink_without_writing_outside_project(self):
+        directory = Path(".test_work") / uuid.uuid4().hex
+        directory.mkdir(parents=True)
+        try:
+            target = project_directory(directory, "telegram_bot")
+            original = empty_memory("telegram_bot")
+            original["summary"] = "Original"
+            write_project(target, original, render_all(original))
+
+            external = directory / "outside.md"
+            external.write_text("do not overwrite", encoding="utf-8")
+            managed_file = target / "PROJECT_CONTEXT.md"
+            managed_file.unlink()
+            try:
+                managed_file.symlink_to(external.resolve())
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"Symbolic links are not available: {exc}")
+
+            updated = empty_memory("telegram_bot")
+            updated["summary"] = "Updated"
+            with self.assertRaisesRegex(ValueError, "Links and reparse points"):
+                write_project(target, updated, render_all(updated))
+
+            self.assertEqual(external.read_text(encoding="utf-8"), "do not overwrite")
+            self.assertEqual(load_memory(target)["summary"], "Original")
+            self.assertEqual(list(directory.glob(".telegram_bot.*")), [])
+        finally:
+            shutil.rmtree(directory)
+
     def test_transaction_rolls_back_when_directory_swap_fails(self):
         directory = Path(".test_work") / uuid.uuid4().hex
         directory.mkdir(parents=True)

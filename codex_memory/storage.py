@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import uuid
 from pathlib import Path
 from typing import Any
@@ -45,13 +46,17 @@ def write_project(project_dir: Path, memory: dict[str, Any], markdown_files: dic
     staging.mkdir()
     try:
         if project_dir.exists():
+            _reject_links_or_reparse_points(project_dir)
             if not project_dir.is_dir():
                 raise ValueError(f"Project memory path is not a directory: {project_dir}")
             shutil.copytree(project_dir, staging, dirs_exist_ok=True, symlinks=True)
         for name, content in files.items():
             if Path(name).name != name:
                 raise ValueError(f"Invalid output filename: {name}")
-            _write_complete(staging / name, content)
+            output_path = staging / name
+            if output_path.exists() and _is_link_or_reparse_point(output_path):
+                raise ValueError(f"Refusing to write through a link or reparse point: {output_path}")
+            _write_complete(output_path, content)
         _replace_directory(project_dir, staging)
     finally:
         if staging.exists():
@@ -63,6 +68,37 @@ def _write_complete(path: Path, content: str) -> None:
         handle.write(content)
         handle.flush()
         os.fsync(handle.fileno())
+
+
+def _reject_links_or_reparse_points(root: Path) -> None:
+    """Reject links before copying an existing project into writable staging."""
+    if _is_link_or_reparse_point(root):
+        raise ValueError(f"Project memory path must not be a link or reparse point: {root}")
+
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = list(os.scandir(directory))
+        except OSError as exc:
+            raise ValueError(f"Cannot safely inspect project memory directory {directory}: {exc}") from exc
+        for entry in entries:
+            path = Path(entry.path)
+            if _is_link_or_reparse_point(path):
+                raise ValueError(f"Links and reparse points are not allowed in project memory: {path}")
+            if entry.is_dir(follow_symlinks=False):
+                pending.append(path)
+
+
+def _is_link_or_reparse_point(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    if stat.S_ISLNK(metadata.st_mode):
+        return True
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return bool(getattr(metadata, "st_file_attributes", 0) & reparse_flag)
 
 
 def _replace_directory(project_dir: Path, staging: Path) -> None:
