@@ -104,12 +104,12 @@ def main(argv: list[str] | None = None) -> int:
                 history_path,
             )
             memory["aliases"] = sorted(set([*memory.get("aliases", []), *candidate.aliases]))
-            prepared.append((candidate, target, memory, render_all(memory)))
+            prepared.append((candidate, target, existing, memory, render_all(memory)))
 
         # Analyze and validate every project before changing any output files.
         print("\nСоздание памяти:")
-        for candidate, target, memory, markdown_files in prepared:
-            write_project(target, memory, markdown_files)
+        for candidate, target, existing, memory, markdown_files in prepared:
+            write_project(target, memory, markdown_files, expected_current=existing)
             print(f"  OK {candidate.name}: {target}")
 
         if args.clipboard:

@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import unittest
 import uuid
@@ -7,8 +8,22 @@ from unittest.mock import patch
 
 from codex_memory.markdown_renderer import render_all
 from codex_memory.models import empty_memory
-from codex_memory.storage import load_memory, project_directory, write_project
+from codex_memory.storage import (
+    _recover_transaction,
+    _project_lock,
+    _transaction_paths,
+    load_memory,
+    project_directory,
+    write_project,
+)
 import codex_memory.storage as storage_module
+
+
+def _transaction_artifacts(directory: Path, project: str) -> list[Path]:
+    return [
+        path for path in directory.glob(f".{project}.*")
+        if path.name != f".{project}.lock"
+    ]
 
 
 class StorageTests(unittest.TestCase):
@@ -76,7 +91,7 @@ class StorageTests(unittest.TestCase):
 
             self.assertEqual((target / "NOTES.md").read_text(encoding="utf-8"), "keep me")
             self.assertEqual(load_memory(target)["summary"], "Updated")
-            self.assertEqual(list(directory.glob(".telegram_bot.*")), [])
+            self.assertEqual(_transaction_artifacts(directory, "telegram_bot"), [])
         finally:
             shutil.rmtree(directory)
 
@@ -105,7 +120,7 @@ class StorageTests(unittest.TestCase):
 
             self.assertEqual(external.read_text(encoding="utf-8"), "do not overwrite")
             self.assertEqual(load_memory(target)["summary"], "Original")
-            self.assertEqual(list(directory.glob(".telegram_bot.*")), [])
+            self.assertEqual(_transaction_artifacts(directory, "telegram_bot"), [])
         finally:
             shutil.rmtree(directory)
 
@@ -120,12 +135,9 @@ class StorageTests(unittest.TestCase):
             updated = empty_memory("telegram_bot")
             updated["summary"] = "Should not persist"
             real_replace = storage_module.os.replace
-            calls = 0
-
             def fail_second_replace(source, destination):
-                nonlocal calls
-                calls += 1
-                if calls == 2:
+                staging, _, _, _ = _transaction_paths(target)
+                if Path(source) == staging and Path(destination) == target:
                     raise OSError("simulated swap failure")
                 return real_replace(source, destination)
 
@@ -134,7 +146,155 @@ class StorageTests(unittest.TestCase):
                     write_project(target, updated, render_all(updated))
 
             self.assertEqual(load_memory(target)["summary"], "Original")
-            self.assertEqual(list(directory.glob(".telegram_bot.*")), [])
+            self.assertEqual(_transaction_artifacts(directory, "telegram_bot"), [])
+        finally:
+            shutil.rmtree(directory)
+
+    def test_active_process_lock_prevents_concurrent_writer(self):
+        directory = Path(".test_work") / uuid.uuid4().hex
+        directory.mkdir(parents=True)
+        try:
+            target = project_directory(directory, "telegram_bot")
+            with _project_lock(target):
+                with self.assertRaisesRegex(RuntimeError, "locked by another process"):
+                    write_project(target, empty_memory("telegram_bot"), {})
+
+            self.assertFalse(target.exists())
+            self.assertTrue((directory / ".telegram_bot.lock").is_file())
+        finally:
+            shutil.rmtree(directory)
+
+    def test_rejects_symlink_lock_without_writing_target(self):
+        directory = Path(".test_work") / uuid.uuid4().hex
+        directory.mkdir(parents=True)
+        try:
+            target = project_directory(directory, "telegram_bot")
+            external = directory / "outside.lock"
+            external.write_bytes(b"")
+            lock_path = directory / ".telegram_bot.lock"
+            try:
+                lock_path.symlink_to(external.resolve())
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"Symbolic links are not available: {exc}")
+
+            with self.assertRaisesRegex(ValueError, "lock path must not be a link"):
+                write_project(target, empty_memory("telegram_bot"), {})
+
+            self.assertEqual(external.read_bytes(), b"")
+            self.assertFalse(target.exists())
+        finally:
+            shutil.rmtree(directory)
+
+    def test_process_lock_is_released_after_context(self):
+        directory = Path(".test_work") / uuid.uuid4().hex
+        directory.mkdir(parents=True)
+        try:
+            target = project_directory(directory, "telegram_bot")
+            with _project_lock(target):
+                pass
+            write_project(target, empty_memory("telegram_bot"), {})
+
+            self.assertEqual(load_memory(target)["project"], "telegram_bot")
+        finally:
+            shutil.rmtree(directory)
+
+    def test_rejects_lost_update_from_stale_reader(self):
+        directory = Path(".test_work") / uuid.uuid4().hex
+        directory.mkdir(parents=True)
+        try:
+            target = project_directory(directory, "telegram_bot")
+            original = empty_memory("telegram_bot")
+            original["summary"] = "Original"
+            write_project(target, original, render_all(original))
+            stale = load_memory(target)
+
+            newer = empty_memory("telegram_bot")
+            newer["summary"] = "Newer"
+            write_project(target, newer, render_all(newer))
+
+            stale_update = empty_memory("telegram_bot")
+            stale_update["summary"] = "Stale update"
+            with self.assertRaisesRegex(RuntimeError, "changed after it was read"):
+                write_project(
+                    target,
+                    stale_update,
+                    render_all(stale_update),
+                    expected_current=stale,
+                )
+
+            self.assertEqual(load_memory(target)["summary"], "Newer")
+        finally:
+            shutil.rmtree(directory)
+
+    def test_recovers_interrupted_swap_by_restoring_backup(self):
+        directory = Path(".test_work") / uuid.uuid4().hex
+        directory.mkdir(parents=True)
+        try:
+            target = project_directory(directory, "telegram_bot")
+            original = empty_memory("telegram_bot")
+            original["summary"] = "Original"
+            write_project(target, original, render_all(original))
+            staging, backup, journal, _ = _transaction_paths(target)
+            shutil.copytree(target, staging)
+            os.replace(target, backup)
+            journal.write_text(json.dumps({"version": 1, "phase": "backup_created"}), encoding="utf-8")
+
+            _recover_transaction(target)
+
+            self.assertEqual(load_memory(target)["summary"], "Original")
+            self.assertFalse(staging.exists())
+            self.assertFalse(backup.exists())
+            self.assertFalse(journal.exists())
+        finally:
+            shutil.rmtree(directory)
+
+    def test_load_recovers_interrupted_swap_before_reading(self):
+        directory = Path(".test_work") / uuid.uuid4().hex
+        directory.mkdir(parents=True)
+        try:
+            target = project_directory(directory, "telegram_bot")
+            original = empty_memory("telegram_bot")
+            original["summary"] = "Original"
+            write_project(target, original, render_all(original))
+            staging, backup, journal, _ = _transaction_paths(target)
+            shutil.copytree(target, staging)
+            os.replace(target, backup)
+            journal.write_text(json.dumps({"version": 1, "phase": "backup_created"}), encoding="utf-8")
+
+            loaded = load_memory(target, expected_project="telegram_bot")
+
+            self.assertEqual(loaded["summary"], "Original")
+            self.assertTrue(target.exists())
+            self.assertFalse(staging.exists())
+            self.assertFalse(backup.exists())
+            self.assertFalse(journal.exists())
+        finally:
+            shutil.rmtree(directory)
+
+    def test_recovers_completed_swap_by_removing_backup(self):
+        directory = Path(".test_work") / uuid.uuid4().hex
+        directory.mkdir(parents=True)
+        try:
+            target = project_directory(directory, "telegram_bot")
+            original = empty_memory("telegram_bot")
+            original["summary"] = "Original"
+            write_project(target, original, render_all(original))
+            staging, backup, journal, _ = _transaction_paths(target)
+            os.replace(target, backup)
+            updated = empty_memory("telegram_bot")
+            updated["summary"] = "Updated"
+            shutil.copytree(backup, staging)
+            (staging / "memory.json").write_text(
+                json.dumps(updated, ensure_ascii=False), encoding="utf-8",
+            )
+            os.replace(staging, target)
+            journal.write_text(json.dumps({"version": 1, "phase": "backup_created"}), encoding="utf-8")
+
+            _recover_transaction(target)
+
+            self.assertEqual(load_memory(target)["summary"], "Updated")
+            self.assertFalse(backup.exists())
+            self.assertFalse(journal.exists())
         finally:
             shutil.rmtree(directory)
 
