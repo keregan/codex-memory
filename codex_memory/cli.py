@@ -19,6 +19,7 @@ from .markdown_renderer import render_all
 from .models import ProjectCandidate
 from .project_names import safe_project_name
 from .reconciler import reconcile
+from .schema import validate_memory_document
 from .storage import load_memory, project_directory, write_project
 
 
@@ -121,13 +122,30 @@ def main(argv: list[str] | None = None) -> int:
                 history_path,
             )
             memory["aliases"] = sorted(set([*memory.get("aliases", []), *candidate.aliases]))
+            validate_memory_document(memory)
             prepared.append((candidate, target, existing, memory, render_all(memory)))
 
         # Analyze and validate every project before changing any output files.
         print("\nСоздание памяти:")
+        succeeded = []
+        failed = []
         for candidate, target, existing, memory, markdown_files in prepared:
-            write_project(target, memory, markdown_files, expected_current=existing)
-            print(f"  OK {candidate.name}: {target}")
+            try:
+                write_project(target, memory, markdown_files, expected_current=existing)
+            except (FileNotFoundError, FileExistsError, ValueError, RuntimeError, OSError) as exc:
+                failed.append((candidate.name, exc))
+                print(f"  ERROR {candidate.name}: {exc}", file=sys.stderr)
+            else:
+                succeeded.append(candidate.name)
+                print(f"  OK {candidate.name}: {target}")
+
+        if failed:
+            print(
+                f"\nЗапись завершена частично: успешно {len(succeeded)}, ошибок {len(failed)}. "
+                "Успешные проекты уже сохранены; повторите запуск для проектов с ошибками.",
+                file=sys.stderr,
+            )
+            return 2
 
         if args.clipboard:
             print("\nГотово. Текст из буфера обмена не сохранялся как исходный файл.")

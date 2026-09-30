@@ -7,7 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from codex_memory.cli import _configure_console_output, main
-from codex_memory.models import ProjectCandidate
+from codex_memory.models import ProjectCandidate, empty_memory
+from codex_memory.storage import write_project as real_write_project
 
 
 class CliTests(unittest.TestCase):
@@ -97,6 +98,70 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(result, 2)
             self.assertFalse((memory_root / "first_project").exists())
+        finally:
+            shutil.rmtree(directory)
+
+    def test_validation_failure_does_not_write_any_project(self):
+        directory = Path(".test_work") / uuid.uuid4().hex
+        directory.mkdir(parents=True)
+        try:
+            source = directory / "history.txt"
+            source.write_text("mixed history", encoding="utf-8")
+            memory_root = directory / "memory"
+
+            def invalid_second_memory(existing, extraction, project, display_name, source_path):
+                memory = empty_memory(project, display_name)
+                if project == "second_project":
+                    memory.pop("summary")
+                return memory
+
+            with patch("codex_memory.cli.reconcile", side_effect=invalid_second_memory):
+                result = main([
+                    str(source),
+                    "--projects", "first_project,second_project",
+                    "--yes",
+                    "--memory-dir", str(memory_root),
+                ])
+
+            self.assertEqual(result, 2)
+            self.assertFalse((memory_root / "first_project").exists())
+            self.assertFalse((memory_root / "second_project").exists())
+        finally:
+            shutil.rmtree(directory)
+
+    def test_write_failure_reports_partial_result_and_continues(self):
+        directory = Path(".test_work") / uuid.uuid4().hex
+        directory.mkdir(parents=True)
+        try:
+            source = directory / "history.txt"
+            source.write_text("mixed history", encoding="utf-8")
+            memory_root = directory / "memory"
+            attempted = []
+
+            def fail_middle_project(target, memory, markdown_files, **kwargs):
+                attempted.append(target.name)
+                if target.name == "second_project":
+                    raise OSError("simulated write failure")
+                return real_write_project(target, memory, markdown_files, **kwargs)
+
+            stderr = io.StringIO()
+            with patch("codex_memory.cli.write_project", side_effect=fail_middle_project), patch(
+                "sys.stderr", stderr,
+            ):
+                result = main([
+                    str(source),
+                    "--projects", "first_project,second_project,third_project",
+                    "--yes",
+                    "--memory-dir", str(memory_root),
+                ])
+
+            self.assertEqual(result, 2)
+            self.assertEqual(attempted, ["first_project", "second_project", "third_project"])
+            self.assertTrue((memory_root / "first_project" / "memory.json").is_file())
+            self.assertFalse((memory_root / "second_project").exists())
+            self.assertTrue((memory_root / "third_project" / "memory.json").is_file())
+            self.assertIn("ERROR second_project", stderr.getvalue())
+            self.assertIn("успешно 2, ошибок 1", stderr.getvalue())
         finally:
             shutil.rmtree(directory)
 
