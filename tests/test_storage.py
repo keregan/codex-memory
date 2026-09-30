@@ -312,7 +312,7 @@ class StorageTests(unittest.TestCase):
 
             migrated = load_memory(target, expected_project="telegram_bot")
 
-            self.assertEqual(migrated["schema_version"], 2)
+            self.assertEqual(migrated["schema_version"], 3)
             self.assertEqual(migrated["created_at"], old["last_updated"])
             self.assertEqual(json.loads((target / "memory.json").read_text())["schema_version"], 1)
         finally:

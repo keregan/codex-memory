@@ -12,7 +12,7 @@
     "created_at", "last_updated"
   ],
   "properties": {
-    "schema_version": {"const": 2},
+    "schema_version": {"const": 3},
     "project": {"type": "string", "minLength": 1},
     "display_name": {"type": "string"},
     "aliases": {"type": "array", "items": {"type": "string"}},
@@ -30,7 +30,7 @@
     "known_bugs": {"$ref": "#/$defs/taskList"},
     "decisions": {
       "type": "array",
-      "items": {"oneOf": [{"type": "string", "minLength": 1}, {"$ref": "#/$defs/decision"}]}
+      "items": {"$ref": "#/$defs/decision"}
     },
     "open_questions": {"$ref": "#/$defs/factList"},
     "agent_instructions": {
@@ -63,52 +63,73 @@
   },
   "$defs": {
     "confidence": {"enum": ["HIGH", "MEDIUM", "LOW"]},
+    "itemId": {"type": "string", "pattern": "^[0-9a-f]{20}$"},
     "sourceBlocks": {
       "type": "array",
       "items": {"type": "integer", "minimum": 1},
       "uniqueItems": true
     },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "source_blocks", "observed_at"],
+      "properties": {
+        "source": {"type": "string", "minLength": 1},
+        "source_blocks": {"$ref": "#/$defs/sourceBlocks"},
+        "observed_at": {"type": "string", "minLength": 1}
+      }
+    },
     "fact": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["text"],
+      "required": ["id", "text", "status", "confidence", "source_blocks", "evidence"],
       "properties": {
+        "id": {"$ref": "#/$defs/itemId"},
         "text": {"type": "string", "minLength": 1},
+        "status": {"enum": ["active", "superseded", "disputed"]},
         "confidence": {"$ref": "#/$defs/confidence"},
-        "source_blocks": {"$ref": "#/$defs/sourceBlocks"}
+        "source_blocks": {"$ref": "#/$defs/sourceBlocks"},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}
       }
     },
     "factList": {
       "type": "array",
-      "items": {"oneOf": [{"type": "string", "minLength": 1}, {"$ref": "#/$defs/fact"}]}
+      "items": {"$ref": "#/$defs/fact"}
     },
     "task": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["title"],
+      "required": ["id", "title", "status", "confidence", "source_blocks", "evidence"],
       "properties": {
+        "id": {"$ref": "#/$defs/itemId"},
         "title": {"type": "string", "minLength": 1},
         "status": {"enum": ["current", "todo", "idea", "bug", "completed"]},
         "confidence": {"$ref": "#/$defs/confidence"},
-        "source_blocks": {"$ref": "#/$defs/sourceBlocks"}
+        "source_blocks": {"$ref": "#/$defs/sourceBlocks"},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}
       }
     },
     "taskList": {
       "type": "array",
-      "items": {"oneOf": [{"type": "string", "minLength": 1}, {"$ref": "#/$defs/task"}]}
+      "items": {"$ref": "#/$defs/task"}
     },
     "decision": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["title"],
+      "required": [
+        "id", "title", "reason", "date", "previous", "status",
+        "confidence", "source_blocks", "evidence"
+      ],
       "properties": {
+        "id": {"$ref": "#/$defs/itemId"},
         "title": {"type": "string", "minLength": 1},
         "reason": {"type": "string"},
         "date": {"type": "string"},
         "previous": {"type": "string"},
         "status": {"enum": ["active", "superseded"]},
         "confidence": {"$ref": "#/$defs/confidence"},
-        "source_blocks": {"$ref": "#/$defs/sourceBlocks"}
+        "source_blocks": {"$ref": "#/$defs/sourceBlocks"},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}
       }
     }
   }

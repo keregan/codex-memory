@@ -12,6 +12,7 @@ FACT_LIST_FIELDS = (
 )
 TASK_LIST_FIELDS = ("current_tasks", "todo_tasks", "completed_tasks", "ideas", "known_bugs")
 AGENT_FIELDS = ("structure", "commands", "conventions", "rules", "do_not_change")
+FACT_STATUSES = {"active", "superseded", "disputed"}
 
 
 def schema_path() -> Path:
@@ -81,38 +82,64 @@ def _validate_items(
 ) -> None:
     if not isinstance(value, list):
         raise ValueError(f"Memory field '{field}' must be a list")
+    seen_ids = set()
     for item in value:
-        if isinstance(item, str):
-            if not item.strip():
-                raise ValueError(f"Memory field '{field}' contains an empty string")
-            continue
         if not isinstance(item, dict) or not isinstance(item.get(text_key), str) or not item[text_key].strip():
             raise ValueError(f"Memory field '{field}' contains an invalid item")
-        allowed_keys = {text_key, "confidence", "source_blocks"}
-        if task:
-            allowed_keys.add("status")
+        allowed_keys = {"id", text_key, "status", "confidence", "source_blocks", "evidence"}
         if decision:
-            allowed_keys.update({"reason", "date", "previous", "status"})
+            allowed_keys.update({"reason", "date", "previous"})
         unknown_keys = set(item) - allowed_keys
         if unknown_keys:
             raise ValueError(
                 f"Memory field '{field}' contains unknown item fields: {', '.join(sorted(unknown_keys))}"
             )
-        confidence = item.get("confidence")
-        if confidence is not None and confidence not in CONFIDENCE_LEVELS:
-            raise ValueError(f"Memory field '{field}' contains invalid confidence")
-        blocks = item.get("source_blocks")
-        if blocks is not None and (
-            not isinstance(blocks, list)
-            or not all(isinstance(number, int) and not isinstance(number, bool) and number > 0 for number in blocks)
-            or len(set(blocks)) != len(blocks)
+        required_keys = allowed_keys
+        missing_keys = required_keys - set(item)
+        if missing_keys:
+            raise ValueError(
+                f"Memory field '{field}' item is missing fields: {', '.join(sorted(missing_keys))}"
+            )
+        item_id = item["id"]
+        if not isinstance(item_id, str) or len(item_id) != 20 or any(
+            character not in "0123456789abcdef" for character in item_id
         ):
+            raise ValueError(f"Memory field '{field}' contains invalid item id")
+        if item_id in seen_ids:
+            raise ValueError(f"Memory field '{field}' contains duplicate item id")
+        seen_ids.add(item_id)
+        confidence = item["confidence"]
+        if confidence not in CONFIDENCE_LEVELS:
+            raise ValueError(f"Memory field '{field}' contains invalid confidence")
+        if not _valid_source_blocks(item["source_blocks"]):
             raise ValueError(f"Memory field '{field}' contains invalid source_blocks")
-        if task and item.get("status") is not None and item["status"] not in TASK_STATUSES:
+        evidence = item["evidence"]
+        if not isinstance(evidence, list):
+            raise ValueError(f"Memory field '{field}' contains invalid evidence")
+        for entry in evidence:
+            if not isinstance(entry, dict) or set(entry) != {"source", "source_blocks", "observed_at"}:
+                raise ValueError(f"Memory field '{field}' contains invalid evidence")
+            if not isinstance(entry["source"], str) or not entry["source"]:
+                raise ValueError(f"Memory field '{field}' evidence has invalid source")
+            if not isinstance(entry["observed_at"], str) or not entry["observed_at"]:
+                raise ValueError(f"Memory field '{field}' evidence has invalid observed_at")
+            if not _valid_source_blocks(entry["source_blocks"]):
+                raise ValueError(f"Memory field '{field}' evidence has invalid source_blocks")
+        if task and item["status"] not in TASK_STATUSES:
             raise ValueError(f"Memory field '{field}' contains invalid task status")
         if decision:
-            for optional_text in ("reason", "date", "previous"):
-                if item.get(optional_text) is not None and not isinstance(item[optional_text], str):
-                    raise ValueError(f"Memory decisions contain invalid {optional_text}")
-            if item.get("status") is not None and item["status"] not in {"active", "superseded"}:
+            for required_text in ("reason", "date", "previous"):
+                if not isinstance(item[required_text], str):
+                    raise ValueError(f"Memory decisions contain invalid {required_text}")
+            if item["status"] not in {"active", "superseded"}:
                 raise ValueError("Memory decisions contain invalid status")
+        elif not task and item["status"] not in FACT_STATUSES:
+            raise ValueError(f"Memory field '{field}' contains invalid fact status")
+
+
+def _valid_source_blocks(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and all(isinstance(number, int) and not isinstance(number, bool) and number > 0 for number in value)
+        and len(set(value)) == len(value)
+    )

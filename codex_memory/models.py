@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+import hashlib
 from typing import Any
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 CONFIDENCE_LEVELS = {"HIGH", "MEDIUM", "LOW"}
 TASK_STATUSES = {"current", "todo", "idea", "bug", "completed"}
 
@@ -62,6 +63,11 @@ def empty_memory(project: str, display_name: str | None = None) -> dict[str, Any
 
 def utc_now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def stable_item_id(kind: str, text: str) -> str:
+    normalized = " ".join(text.casefold().replace("ё", "е").split())
+    return hashlib.sha256(f"{kind}\0{normalized}".encode("utf-8")).hexdigest()[:20]
 
 
 def message_to_dict(message: Message) -> dict[str, Any]:

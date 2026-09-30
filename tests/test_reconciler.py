@@ -36,9 +36,33 @@ class ReconcilerTests(unittest.TestCase):
             "tasks": [], "open_questions": [], "agent_instructions": {},
         }, "bot", "Bot", Path("two.txt"))
 
-        names = [item if isinstance(item, str) else item["text"] for item in updated["technologies"]]
-        self.assertNotIn("SQLite", names)
-        self.assertIn("PostgreSQL", names)
+        technologies = {item["text"]: item for item in updated["technologies"]}
+        self.assertEqual(technologies["SQLite"]["status"], "superseded")
+        self.assertEqual(technologies["PostgreSQL"]["status"], "active")
+
+    def test_duplicate_fact_keeps_id_and_accumulates_evidence(self):
+        first = reconcile(None, {
+            "summary": "", "purpose": "", "technologies": [{
+                "text": "Python", "confidence": "MEDIUM", "source_blocks": [1],
+            }],
+            "architecture": [], "components": [], "implemented": [], "constraints": [],
+            "decisions": [], "tasks": [], "open_questions": [], "agent_instructions": {},
+        }, "bot", "Bot", Path("one.txt"))
+        first_id = first["technologies"][0]["id"]
+
+        updated = reconcile(first, {
+            "summary": "", "purpose": "", "technologies": [{
+                "text": "Python", "confidence": "HIGH", "source_blocks": [4],
+            }],
+            "architecture": [], "components": [], "implemented": [], "constraints": [],
+            "decisions": [], "tasks": [], "open_questions": [], "agent_instructions": {},
+        }, "bot", "Bot", Path("two.txt"))
+
+        fact = updated["technologies"][0]
+        self.assertEqual(fact["id"], first_id)
+        self.assertEqual(fact["confidence"], "HIGH")
+        self.assertEqual(fact["source_blocks"], [1, 4])
+        self.assertEqual([entry["source"] for entry in fact["evidence"]], ["one.txt", "two.txt"])
 
 
 if __name__ == "__main__":

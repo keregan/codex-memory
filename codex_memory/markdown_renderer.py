@@ -105,6 +105,9 @@ def _text(item: Any) -> str:
 
 def _metadata(item: dict[str, Any]) -> str:
     details = []
+    status = item.get("status")
+    if status in {"superseded", "disputed"}:
+        details.append(f"status: {status}")
     confidence = item.get("confidence")
     if confidence in {"LOW", "MEDIUM"}:
         details.append(f"confidence: {confidence}")

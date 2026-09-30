@@ -11,8 +11,13 @@ class SchemaMigrationTests(unittest.TestCase):
 
         self.assertEqual(schema["$schema"], "https://json-schema.org/draft/2020-12/schema")
         self.assertEqual(schema["properties"]["schema_version"]["const"], SCHEMA_VERSION)
+        self.assertIn("evidence", schema["$defs"])
+        self.assertEqual(
+            set(schema["$defs"]["fact"]["required"]),
+            {"id", "text", "status", "confidence", "source_blocks", "evidence"},
+        )
 
-    def test_migrates_v1_to_v2_and_preserves_created_date(self):
+    def test_migrates_v1_through_current_and_preserves_created_date(self):
         old = empty_memory("telegram_bot")
         old["schema_version"] = 1
         old.pop("created_at")
@@ -24,8 +29,28 @@ class SchemaMigrationTests(unittest.TestCase):
         migrated, changed = migrate_memory_document(old)
 
         self.assertTrue(changed)
-        self.assertEqual(migrated["schema_version"], 2)
+        self.assertEqual(migrated["schema_version"], SCHEMA_VERSION)
         self.assertEqual(migrated["created_at"], "2026-01-01T01:02:03+00:00")
+
+    def test_migrates_v2_items_to_stable_ids_and_evidence_shape(self):
+        old = empty_memory("telegram_bot")
+        old["schema_version"] = 2
+        old["technologies"] = [
+            "Python",
+            {"text": "SQLite", "confidence": "HIGH", "source_blocks": [2]},
+        ]
+        old["todo_tasks"] = ["Добавить тесты"]
+        old["decisions"] = [{"title": "Использовать SQLite", "status": "active"}]
+
+        migrated, changed = migrate_memory_document(old)
+
+        self.assertTrue(changed)
+        self.assertEqual(migrated["schema_version"], SCHEMA_VERSION)
+        self.assertEqual(len(migrated["technologies"][0]["id"]), 20)
+        self.assertEqual(migrated["technologies"][1]["source_blocks"], [2])
+        self.assertEqual(migrated["technologies"][1]["evidence"], [])
+        self.assertEqual(migrated["todo_tasks"][0]["status"], "todo")
+        self.assertEqual(migrated["decisions"][0]["status"], "active")
 
     def test_current_document_is_not_changed(self):
         current = empty_memory("telegram_bot")
