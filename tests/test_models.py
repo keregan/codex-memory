@@ -8,6 +8,7 @@ class ExtractionValidationTests(unittest.TestCase):
         result = validate_extraction({
             "technologies": [
                 {"text": "Python", "confidence": "certain", "source_blocks": [1, "2", -1, True]},
+                {"text": "SQLite", "status": "disputed", "source_blocks": [3]},
                 {"unexpected": "ignored"},
                 42,
             ],
@@ -16,9 +17,10 @@ class ExtractionValidationTests(unittest.TestCase):
             "agent_instructions": {"rules": ["Keep it local"]},
         })
 
-        self.assertEqual(result["technologies"], [{
+        self.assertEqual(result["technologies"][0], {
             "text": "Python", "confidence": "MEDIUM", "source_blocks": [1, 2],
-        }])
+        })
+        self.assertEqual(result["technologies"][1]["status"], "disputed")
         self.assertNotIn("secret", result["decisions"][0])
         self.assertEqual(result["tasks"][0]["status"], "todo")
         self.assertNotIn("extra", result["tasks"][0])

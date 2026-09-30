@@ -142,11 +142,15 @@ def _clean_fact_list(items: list[Any]) -> list[Any]:
         elif isinstance(item, dict):
             text = str(item.get("text") or item.get("title") or "").strip()
             if text:
-                cleaned.append({
+                fact = {
                     "text": text,
                     "confidence": _clean_confidence(item.get("confidence")),
                     "source_blocks": _clean_source_blocks(item.get("source_blocks")),
-                })
+                }
+                status = str(item.get("status", "")).lower()
+                if status in {"active", "superseded", "disputed"}:
+                    fact["status"] = status
+                cleaned.append(fact)
     return cleaned
 
 

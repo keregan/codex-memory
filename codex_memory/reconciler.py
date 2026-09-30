@@ -115,7 +115,7 @@ def _merge_decisions(old: list[Any], new: list[Any]) -> list[Any]:
         previous = str(decision.get("previous", "")).strip() if isinstance(decision, dict) else ""
         if previous:
             for item in result:
-                if isinstance(item, dict) and _similar(_item_text(item), previous):
+                if isinstance(item, dict) and _explicit_reference_matches(_item_text(item), previous):
                     item["status"] = "superseded"
         if isinstance(decision, dict):
             decision.setdefault("status", "active")
@@ -249,6 +249,10 @@ def _merge_metadata(existing: dict[str, Any], new: dict[str, Any]) -> None:
             evidence.append(deepcopy(entry))
     if _confidence_rank(new.get("confidence")) > _confidence_rank(existing.get("confidence")):
         existing["confidence"] = new["confidence"]
+    if new.get("status") == "disputed":
+        existing["status"] = "disputed"
+    elif new.get("status") == "superseded":
+        existing["status"] = "superseded"
 
 
 def _confidence(value: Any) -> str:
@@ -290,5 +294,22 @@ def _similar(left: str, right: str) -> bool:
     if a == b:
         return True
     tokens_a, tokens_b = set(a.split()), set(b.split())
-    overlap = len(tokens_a & tokens_b) / max(1, min(len(tokens_a), len(tokens_b)))
-    return overlap >= 0.75 or SequenceMatcher(None, a, b).ratio() >= 0.72
+    shared = tokens_a & tokens_b
+    union = tokens_a | tokens_b
+    if len(shared) >= 2:
+        jaccard = len(shared) / len(union)
+        containment = len(shared) / min(len(tokens_a), len(tokens_b))
+        if jaccard >= 0.75 or (containment == 1 and abs(len(tokens_a) - len(tokens_b)) <= 1):
+            return True
+    return len(tokens_a) == len(tokens_b) and SequenceMatcher(None, a, b).ratio() >= 0.9
+
+
+def _explicit_reference_matches(text: str, reference: str) -> bool:
+    normalized_text = _normalize(text)
+    normalized_reference = _normalize(reference)
+    if not normalized_text or not normalized_reference:
+        return False
+    if _similar(normalized_text, normalized_reference):
+        return True
+    reference_tokens = set(normalized_reference.split())
+    return reference_tokens <= set(normalized_text.split())
