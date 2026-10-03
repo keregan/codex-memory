@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from codex_memory.analyzer import LLMAnalyzer
+from codex_memory.analyzer import LLMAnalyzer, _hierarchical_combine_extractions
 from codex_memory.chunking import chunk_messages
 from codex_memory.models import Message, ProjectCandidate
 
@@ -76,6 +76,44 @@ class ChunkingTests(unittest.TestCase):
         self.assertEqual(len(client.calls), 2)
         self.assertEqual(extraction["summary"], "Current summary")
         self.assertEqual(extraction["technologies"], ["SQLite", "PostgreSQL"])
+
+    def test_hierarchical_reduce_deduplicates_and_merges_metadata(self):
+        empty = {
+            "summary": "", "purpose": "", "technologies": [], "architecture": [],
+            "components": [], "implemented": [], "constraints": [], "decisions": [],
+            "tasks": [], "open_questions": [], "agent_instructions": {},
+        }
+        extractions = [
+            {**empty, "summary": "Reliable summary", "technologies": [{
+                "text": "Python", "confidence": "MEDIUM", "source_blocks": [1],
+            }]},
+            {**empty, "tasks": [{
+                "title": "Add API tests", "status": "todo", "confidence": "MEDIUM",
+                "source_blocks": [2],
+            }]},
+            {**empty, "technologies": [{
+                "text": "Python", "confidence": "HIGH", "source_blocks": [3],
+            }]},
+            {**empty, "tasks": [{
+                "title": "Add API tests", "status": "completed", "confidence": "HIGH",
+                "source_blocks": [4],
+            }]},
+            {**empty, "summary": "[NEEDS_REVIEW] unclear"},
+        ]
+
+        result = _hierarchical_combine_extractions(extractions, fan_in=2)
+
+        self.assertEqual(result["summary"], "Reliable summary")
+        self.assertEqual(len(result["technologies"]), 1)
+        self.assertEqual(result["technologies"][0]["confidence"], "HIGH")
+        self.assertEqual(result["technologies"][0]["source_blocks"], [1, 3])
+        self.assertEqual(len(result["tasks"]), 1)
+        self.assertEqual(result["tasks"][0]["status"], "completed")
+        self.assertEqual(result["tasks"][0]["source_blocks"], [2, 4])
+
+    def test_hierarchical_reduce_rejects_invalid_fan_in(self):
+        with self.assertRaises(ValueError):
+            _hierarchical_combine_extractions([], fan_in=1)
 
 
 if __name__ == "__main__":

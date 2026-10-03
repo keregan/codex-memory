@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .chunking import DEFAULT_CHUNK_CHARS, chunk_messages
@@ -31,6 +32,8 @@ TECHNOLOGIES = {
     "typescript": "TypeScript", "javascript": "JavaScript", "telegram": "Telegram",
     "pytest": "pytest", "git": "Git",
 }
+DEFAULT_REDUCTION_FAN_IN = 8
+MIN_REDUCTION_FAN_IN = 2
 
 
 class RuleBasedAnalyzer:
@@ -135,9 +138,17 @@ class RuleBasedAnalyzer:
 
 
 class LLMAnalyzer:
-    def __init__(self, client: "ChatCompletionsClient", chunk_chars: int = DEFAULT_CHUNK_CHARS) -> None:
+    def __init__(
+        self,
+        client: "ChatCompletionsClient",
+        chunk_chars: int = DEFAULT_CHUNK_CHARS,
+        reduction_fan_in: int = DEFAULT_REDUCTION_FAN_IN,
+    ) -> None:
+        if reduction_fan_in < MIN_REDUCTION_FAN_IN:
+            raise ValueError(f"Reduction fan-in must be at least {MIN_REDUCTION_FAN_IN}")
         self.client = client
         self.chunk_chars = chunk_chars
+        self.reduction_fan_in = reduction_fan_in
 
     def detect_projects(self, messages: list[Message]) -> list[ProjectCandidate]:
         combined: dict[str, ProjectCandidate] = {}
@@ -192,7 +203,24 @@ class LLMAnalyzer:
             extracted.append(validate_extraction(
                 self.client.json_completion(EXTRACT_SYSTEM_PROMPT, user_content)
             ))
-        return _combine_extractions(extracted)
+        return _hierarchical_combine_extractions(extracted, self.reduction_fan_in)
+
+
+def _hierarchical_combine_extractions(
+    extractions: list[dict[str, Any]],
+    fan_in: int = DEFAULT_REDUCTION_FAN_IN,
+) -> dict[str, Any]:
+    if fan_in < MIN_REDUCTION_FAN_IN:
+        raise ValueError(f"Reduction fan-in must be at least {MIN_REDUCTION_FAN_IN}")
+    if not extractions:
+        return _combine_extractions([])
+    level = [validate_extraction(extraction) for extraction in extractions]
+    while len(level) > 1:
+        level = [
+            _combine_extractions(level[index:index + fan_in])
+            for index in range(0, len(level), fan_in)
+        ]
+    return level[0]
 
 
 def _combine_extractions(extractions: list[dict[str, Any]]) -> dict[str, Any]:
@@ -217,15 +245,97 @@ def _combine_extractions(extractions: list[dict[str, Any]]) -> dict[str, Any]:
     )
     for extraction in extractions:
         for scalar in ("summary", "purpose"):
-            if extraction.get(scalar):
-                combined[scalar] = extraction[scalar]
+            combined[scalar] = _choose_scalar(combined[scalar], extraction.get(scalar, ""))
         for field in list_fields:
-            combined[field].extend(extraction.get(field, []))
+            combined[field] = _merge_extraction_list(
+                combined[field], extraction.get(field, []), field,
+            )
         for field in combined["agent_instructions"]:
-            combined["agent_instructions"][field].extend(
-                extraction.get("agent_instructions", {}).get(field, [])
+            combined["agent_instructions"][field] = _merge_extraction_list(
+                combined["agent_instructions"][field],
+                extraction.get("agent_instructions", {}).get(field, []),
+                f"agent_instructions.{field}",
             )
     return validate_extraction(combined)
+
+
+def _choose_scalar(current: str, newer: str) -> str:
+    newer = str(newer or "").strip()
+    if not newer:
+        return current
+    current_review = str(current).startswith("[NEEDS_REVIEW]")
+    newer_review = newer.startswith("[NEEDS_REVIEW]")
+    if current and newer_review and not current_review:
+        return current
+    return newer
+
+
+def _merge_extraction_list(old: list[Any], new: list[Any], field: str) -> list[Any]:
+    result = deepcopy(old)
+    positions = {
+        _extraction_item_key(item): index
+        for index, item in enumerate(result)
+        if _extraction_item_key(item)
+    }
+    for item in new if isinstance(new, list) else []:
+        key = _extraction_item_key(item)
+        if not key:
+            continue
+        position = positions.get(key)
+        if position is None:
+            positions[key] = len(result)
+            result.append(deepcopy(item))
+        else:
+            result[position] = _merge_extraction_item(result[position], item, field)
+    return result
+
+
+def _merge_extraction_item(existing: Any, newer: Any, field: str) -> Any:
+    if not isinstance(existing, dict) and not isinstance(newer, dict):
+        return existing
+    if not isinstance(existing, dict):
+        return deepcopy(newer)
+    if not isinstance(newer, dict):
+        return deepcopy(existing)
+
+    merged = deepcopy(existing)
+    for key, value in newer.items():
+        if key not in {"source_blocks", "confidence", "status"} and value not in (None, "", []):
+            merged[key] = deepcopy(value)
+    merged["source_blocks"] = sorted(set([
+        *_clean_extraction_blocks(existing.get("source_blocks")),
+        *_clean_extraction_blocks(newer.get("source_blocks")),
+    ]))
+    if _confidence_rank(str(newer.get("confidence", "MEDIUM"))) > _confidence_rank(
+        str(existing.get("confidence", "MEDIUM"))
+    ):
+        merged["confidence"] = newer["confidence"]
+    newer_status = newer.get("status")
+    if field == "tasks" or field == "decisions":
+        if newer_status:
+            merged["status"] = newer_status
+    elif newer_status == "disputed" or (
+        newer_status == "superseded" and merged.get("status") != "disputed"
+    ):
+        merged["status"] = newer_status
+    return merged
+
+
+def _extraction_item_key(item: Any) -> str:
+    if isinstance(item, dict):
+        text = str(item.get("text") or item.get("title") or "")
+    else:
+        text = str(item)
+    return " ".join(text.casefold().replace("ё", "е").split())
+
+
+def _clean_extraction_blocks(value: Any) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    return [
+        number for number in value
+        if isinstance(number, int) and not isinstance(number, bool) and number > 0
+    ]
 
 
 def _confidence_rank(value: str) -> int:
