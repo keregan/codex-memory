@@ -8,7 +8,7 @@
 python -m unittest discover -s tests -v
 python -m compileall -q main.py codex_memory tests
 git status --short
-git check-ignore -v history.txt memory/example/memory.json .env secret.key
+git check-ignore -v history.txt history.json history.jsonl history.md memory/example/memory.json .env secret.key
 git diff -- .
 ```
 

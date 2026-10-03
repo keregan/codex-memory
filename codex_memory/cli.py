@@ -27,7 +27,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Turn a mixed chat history into project-oriented Markdown and JSON memory.",
     )
-    parser.add_argument("history", nargs="?", type=Path, help="UTF-8 or CP1251 text history (read-only)")
+    parser.add_argument(
+        "history", nargs="?", type=Path,
+        help="Text, Markdown, JSON, JSONL or NDJSON history (read-only)",
+    )
     parser.add_argument(
         "--clipboard", action="store_true",
         help="Read history directly from the Windows clipboard instead of a file",

@@ -25,8 +25,29 @@ env/
 
 # Private chat data and generated memory
 history*.txt
+history*.json
+history*.jsonl
+history*.ndjson
+history*.md
+history*.markdown
 chat*.txt
+chat*.json
+chat*.jsonl
+chat*.ndjson
+chat*.md
+chat*.markdown
 transcript*.txt
+transcript*.json
+transcript*.jsonl
+transcript*.ndjson
+transcript*.md
+transcript*.markdown
+conversation*.txt
+conversation*.md
+conversation*.markdown
+conversation*.json
+conversation*.jsonl
+conversation*.ndjson
 exports/
 memory/
 *.sqlite
